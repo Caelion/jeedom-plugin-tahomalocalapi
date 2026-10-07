@@ -28,6 +28,8 @@ import json
 import argparse
 import requests
 from urllib.parse import quote
+# 2026-09-28 Optimisation (MrGreen)
+tahoma_session = requests.Session()
 
 try:
 	from jeedom.jeedom import *
@@ -37,14 +39,16 @@ except ImportError:
 
 def read_socket():
 	global JEEDOM_SOCKET_MESSAGE
-	if not JEEDOM_SOCKET_MESSAGE.empty():
+  # 2026-09-28 Optimisation (MrGreen)
+	#if not JEEDOM_SOCKET_MESSAGE.empty():
+	while not JEEDOM_SOCKET_MESSAGE.empty():
 		logging.debug("Message received in socket JEEDOM_SOCKET_MESSAGE")
 		message = json.loads(JEEDOM_SOCKET_MESSAGE.get().decode('utf-8'))
 		if message['apikey'] != _apikey:
 			logging.error("Invalid apikey from socket: %s", message)
 			return
 		try:
-			if message['action'] == 'execCmd':				
+			if message['action'] == 'execCmd':
 				logging.info('== action execute command ==')
 				execCmd(message)
 			elif message['action'] == 'synchronize':
@@ -67,7 +71,7 @@ def listen():
 	logging.debug('Listen socket jeedom')
 	jeedom_socket.open()
 
-	
+
 	httpLog()
 
 	if not _tokenTahoma:
@@ -84,17 +88,21 @@ def listen():
 	getDevicesList()
 	registerListener()	
 
+  # 2026-09-28 : Optimisations (MrGreen)
 	try:
-		nb = 0
-		jeedom_com.send_change_immediate({'healthCheck' : 'OK'})
+		last_fetch = 0
+		last_healthcheck = time.monotonic()
+		jeedom_com.send_change_immediate({'healthCheck': 'OK'})
 		while 1:
-			time.sleep(1)
 			read_socket()
-			fetchListener()
-			nb +=1
-			if int(nb) > 300:
+			now = time.monotonic()
+			if now - last_fetch >= 5: #toutes les 0,1 seconde
+				fetchListener()
+				last_fetch = now
+			if now - last_healthcheck >= 300: #toutes les 5 secondes
 				jeedom_com.send_change_immediate({'healthCheck': 'OK'})
-				nb=0
+				last_healthcheck = now
+			time.sleep(0.1)
 	except KeyboardInterrupt:
 		shutdown()
 	except:
@@ -383,18 +391,25 @@ def fetchListener():
 	try:
 
 		url = _ipBox +'/enduser-mobile-web/1/enduserAPI/events/' + _listenerId + '/fetch'		
-		
+
 		headers = {
 			'Content-Type' : 'application/json',
 			'Authorization' : 'Bearer ' + _tokenTahoma
 		}
-		
-		response = requests.request("POST", url, verify=False, headers=headers)		
+
+		# 2026-09-28 Optimisation (MrGreen)
+		#response = requests.request("POST", url, verify=False, headers=headers)
+		response = tahoma_session.post(url, verify=False, headers=headers)
 
 		if response.status_code and (response.status_code == 200):
-			if response.json():
-				logging.debug("Response : %s", response.json())
-				json_data = response.json()
+			# 2026-09-28 Evites le triple decodage du json (MrGreen)
+			json_data = response.json()
+
+			#if response.json():
+			if json_data:
+				#logging.debug("Response : %s", response.json())
+				logging.debug("Response : %s", json_data)
+				#json_data = response.json()
 				for item in json_data:
 					#logging.debug(item['name'] + ' -> ' + item['deviceURL'])
 					jeedom_com.send_change_immediate({'eventItem' : item})
@@ -602,7 +617,7 @@ _device = 'auto'
 _pidfile = '/tmp/tahomalocalapid.pid'
 _apikey = ''
 _callback = ''
-_cycle = 0.3
+_cycle = 0 #2026-09-28 : Passage de 0.3 a 0, car inutile (MrGreen)
 _user = ''
 _pwd = ''
 _jsessionid=''
@@ -677,8 +692,8 @@ signal.signal(signal.SIGTERM, handler)
 
 try:
 	jeedom_utils.write_pid(str(_pidfile))
-	jeedom_com = jeedom_com(apikey = _apikey,url = _callback,cycle=_cycle) # création de l'objet jeedom_com
-	if not jeedom_com.test(): #premier test pour vérifier que l'url de callback est correcte
+	jeedom_com = jeedom_com(apikey = _apikey,url = _callback,cycle=_cycle) # crÃ©ation de l'objet jeedom_com
+	if not jeedom_com.test(): #premier test pour vÃ©rifier que l'url de callback est correcte
 		logging.error('Network communication issues. Please fixe your Jeedom network configuration.')
 		shutdown()
 
